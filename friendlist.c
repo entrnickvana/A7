@@ -12,7 +12,8 @@
 #include "dictionary.h"
 #include "more_string.h"
 
-static void doit(int fd);
+void doit(int fd); 
+void *doit_thread(void* connfd);
 static dictionary_t *read_requesthdrs(rio_t *rp);
 static void read_postquery(rio_t *rp, dictionary_t *headers, dictionary_t *d);
 static void clienterror(int fd, char *cause, char *errnum, 
@@ -51,11 +52,24 @@ int main(int argc, char **argv)
       Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, 
                   port, MAXLINE, 0);
       printf("Accepted connection from (%s, %s)\n", hostname, port);
-      doit(connfd);
-      Close(connfd);
+
+      pthread_t t1;
+      int* connfd_p = malloc(sizeof(int));
+      *connfd_p = connfd;
+      Pthread_create(&t1, NULL, doit_thread, connfd_p);
+
     }
   }
 }
+
+void *doit_thread(void* connfd_p){
+  int connfd = *(int*)connfd_p;
+  free(connfd_p);
+  doit(connfd);
+  Close(connfd);
+  return NULL;
+}
+
 
 /*
  * doit - handle one HTTP request/response transaction
@@ -187,7 +201,7 @@ static void serve_sum(int fd, dictionary_t *query)
   arg2 = dictionary_get(query,"y");
 
   int x, y, result;
-  const char* temp;
+  char* temp = NULL;
   if(arg1 == NULL) body = strdup("Please provide numbers: x was not specified\n");
   else if(arg2 == NULL)body = strdup("Please provide numbers: y was not specified\n");
   else{
@@ -196,7 +210,7 @@ static void serve_sum(int fd, dictionary_t *query)
     result = x + y;
     temp = strdup(to_string(result));
     body = strdup(append_strings(temp, "\n",NULL));
-//    sleep(30);
+    sleep(30);
   }
 
   len = strlen(body);
@@ -211,7 +225,7 @@ static void serve_sum(int fd, dictionary_t *query)
 
   /* Send response body to client */
   Rio_writen(fd, body, len);
-
+  free(temp);
   free(body);
 }
 
