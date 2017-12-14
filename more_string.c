@@ -83,6 +83,8 @@ char **split_string(const char *str, char sep)
 
 char *join_strings(const char * const *strs, char sep)
 {
+
+  printf("Entered join_strings\n");
   size_t len = 0;
   int i;
   char *str;
@@ -97,10 +99,12 @@ char *join_strings(const char * const *strs, char sep)
   for (i = 0; strs[i] != NULL; i++) {
     memcpy(str + len, strs[i], strlen(strs[i]));
     len += strlen(strs[i]);
+    printf("^^^^^\t%s\n",strs[i]);
     str[len++] = sep;
   }
   str[len] = 0;
 
+  printf("Final string:\n %s\n", str);
   return str;
 }
 
