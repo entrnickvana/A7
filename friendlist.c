@@ -12,15 +12,32 @@
 #include "dictionary.h"
 #include "more_string.h"
 
+struct dictionary_t {
+  int compare_mode;
+  free_proc_t free_value;
+  size_t count, alloc;
+  const char **keys;
+  void **values;
+};
+
+dictionary_t* d;
+
+int debug_on = 1;
+
+
 void doit(int fd); 
 void *doit_thread(void* connfd);
 static dictionary_t *read_requesthdrs(rio_t *rp);
 static void read_postquery(rio_t *rp, dictionary_t *headers, dictionary_t *d);
-static void clienterror(int fd, char *cause, char *errnum, 
-                        char *shortmsg, char *longmsg);
+static void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 static void print_stringdictionary(dictionary_t *d);
 static void serve_request(int fd, dictionary_t *query);
+static void serve_introduce(int fd, dictionary_t *query);
+static void serve_befriend(int fd, dictionary_t *query);
+static void serve_friends(int fd, dictionary_t *query);
+static void serve_unfriend(int fd, dictionary_t *query);
 static void serve_sum(int fd, dictionary_t *query);
+static int contains(dictionary_t* d, char* given_key);
 
 int main(int argc, char **argv) 
 {
@@ -28,6 +45,10 @@ int main(int argc, char **argv)
   char hostname[MAXLINE], port[MAXLINE];
   socklen_t clientlen;
   struct sockaddr_storage clientaddr;
+
+  if(d == NULL)
+  d = make_dictionary(0, free);
+
 
   /* Check command line args */
   if (argc != 2) {
@@ -41,10 +62,10 @@ int main(int argc, char **argv)
      we want to survive errors due to a client. But we
      do want to report errors. */
   exit_on_error(0);
-
+  
   /* Also, don't stop on broken connections: */
   Signal(SIGPIPE, SIG_IGN);
-
+  
   while (1) {
     clientlen = sizeof(clientaddr);
     connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
@@ -52,24 +73,23 @@ int main(int argc, char **argv)
       Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, 
                   port, MAXLINE, 0);
       printf("Accepted connection from (%s, %s)\n", hostname, port);
-
       pthread_t t1;
       int* connfd_p = malloc(sizeof(int));
       *connfd_p = connfd;
       Pthread_create(&t1, NULL, doit_thread, connfd_p);
-
     }
   }
 }
 
 void *doit_thread(void* connfd_p){
+  if(debug_on)printf("Enter new thread\n");  
   int connfd = *(int*)connfd_p;
   free(connfd_p);
   doit(connfd);
   Close(connfd);
+  if(debug_on)printf("Thread Exiting\n");
   return NULL;
 }
-
 
 /*
  * doit - handle one HTTP request/response transaction
@@ -78,8 +98,8 @@ void doit(int fd)
 {
   char buf[MAXLINE], *method, *uri, *version;
   rio_t rio;
-  dictionary_t *headers, *query;
-
+  dictionary_t *headers = NULL, *query = NULL;
+  
   /* Read request line and headers */
   Rio_readinitb(&rio, fd);
   if (Rio_readlineb(&rio, buf, MAXLINE) <= 0)
@@ -105,39 +125,37 @@ void doit(int fd)
       query = make_dictionary(COMPARE_CASE_SENS, free);
       parse_uriquery(uri, query);
 
-
       if (!strcasecmp(method, "POST"))
         read_postquery(&rio, headers, query);
-
+   
       /* For debugging, print the dictionary */
       print_stringdictionary(query);
-
+   
       /* You'll want to handle different queries here,
          but the intial implementation always returns
          nothing: */
-      if(starts_with("/sum", uri)){
-         serve_sum(fd, query);
-      }else{
-         serve_request(fd, query);
-      } 
-
+   
+      if(starts_with("/friends", uri))          {if(debug_on)printf("0\n"); serve_friends(fd, query);}
+      else if(starts_with("/befriend", uri))    {if(debug_on)printf("1\n"); serve_befriend(fd, query);}
+      else if(starts_with("/unfriend", uri))    {if(debug_on)printf("2\n"); serve_unfriend(fd, query);}
+      else if(starts_with("/introduce", uri))   {if(debug_on)printf("3\n"); serve_introduce(fd, query);}
+      else if(starts_with("/sum", uri))         {if(debug_on)printf("3\n"); serve_sum(fd, query);}      
+      else                                      {if(debug_on)printf("4\n"); serve_request(fd, query);}
+    }
       /* Clean up */
       free_dictionary(query);
       free_dictionary(headers);
-    }
-
+  }
     /* Clean up status line */
     free(method);
     free(uri);
-    free(version);
-  }
+    free(version); //arb
 }
 
 /*
  * read_requesthdrs - read HTTP request headers
  */
-dictionary_t *read_requesthdrs(rio_t *rp) 
-{
+dictionary_t *read_requesthdrs(rio_t *rp){
   char buf[MAXLINE];
   dictionary_t *d = make_dictionary(COMPARE_CASE_INSENS, free);
 
@@ -148,7 +166,6 @@ dictionary_t *read_requesthdrs(rio_t *rp)
     printf("%s", buf);
     parse_header_line(buf, d);
   }
-  
   return d;
 }
 
@@ -167,7 +184,7 @@ void read_postquery(rio_t *rp, dictionary_t *headers, dictionary_t *dest)
   buffer[len] = 0;
 
   if (!strcasecmp(type, "application/x-www-form-urlencoded")) {
-    parse_query(buffer, dest);
+    parse_query(buffer, dest); 
   }
 
   free(buffer);
@@ -189,14 +206,9 @@ static char *ok_header(size_t len, const char *content_type) {
 
 static void serve_sum(int fd, dictionary_t *query)
 { 
-
-
   size_t len;
   char *body, *header;
-
-  void* arg1;
-  void* arg2;
-  // Parse for x, y args
+  void* arg1, *arg2;
   arg1 = dictionary_get(query,"x");
   arg2 = dictionary_get(query,"y");
 
@@ -227,6 +239,148 @@ static void serve_sum(int fd, dictionary_t *query)
   Rio_writen(fd, body, len);
   free(temp);
   free(body);
+}
+
+static void serve_introduce(int fd, dictionary_t *query){
+
+
+}
+
+static void serve_befriend(int fd, dictionary_t *query){
+  if(debug_on)printf("Enter Befriend\n");  
+
+  char* body, *header;
+  size_t len, i;
+
+  char** keys = (char**)dictionary_keys(query);
+  char** temp = keys;
+  for(i = 0; temp[i] != NULL; i++)
+    printf("keys %s\n", temp[i]);
+
+  void* u_v = dictionary_get(query, "user");
+  printf("u_v = %s\n",(char*)u_v);
+
+  void* f_v = dictionary_get(query, "friends");
+  printf("f_v = %s\n",(char*)f_v);
+  char** f_v_split = split_string((char*)f_v, '\n');
+
+  for(i = 0; f_v_split[i] != NULL; i++)
+    printf("split_f_v %s\n", f_v_split[i]);
+
+  const char* usr_name = (const char*)u_v;
+  dictionary_t* new_d = dictionary_get(d, usr_name);  
+
+  if(new_d == NULL) {
+    printf("new_d NULL\n");
+    new_d = make_dictionary(0, free);
+    for(i = 0; f_v_split[i] != NULL; i++){
+      printf("split_f_v %s\n", f_v_split[i]);
+      printf("before: new_d count = %zu\n", new_d->count);
+      dictionary_set(new_d, f_v_split[i], NULL);
+      printf("after: new_d count = %zu\n", new_d->count);      
+    }
+    dictionary_set(d, usr_name, new_d);
+  }else{
+    printf("new_d __not__ NULL\n");
+    printf("Count new_d = %zu\n", new_d->count);
+    for(i = 0; f_v_split[i] != NULL; i++){
+      printf("split_f_v %s\n", f_v_split[i]);
+      if(contains(new_d, f_v_split[i]) < 0){
+        printf("new_d does not contain\nnew_d->count before: %zu", new_d->count);
+        dictionary_set(new_d, f_v_split[i], NULL);
+        printf("new_d->count after: %zu", new_d->count);
+      }else{
+        printf("Already contained %s\n", f_v_split[i]);        
+      }
+    }
+  }
+  
+  char** final_keys = (char**)dictionary_keys(d);
+  for(i = 0; final_keys[i] != NULL; i++){
+     printf("final_keys %s\n", final_keys[i]);
+  }
+
+  dictionary_t* check = dictionary_get(d, usr_name);
+  printf("count check = %zu: \n", check->count);
+  char** friend_name_keys = (char**)dictionary_keys(check);
+  for(i = 0; friend_name_keys[i] != NULL; i++){
+     printf("check_keys %s\n", friend_name_keys[i]);
+  }
+
+  char* final_str = join_strings((const char* const*) friend_name_keys, '\n');
+  body = strdup(final_str);
+  len = strlen(body);
+
+  printf("All friends:\n %s\n", final_str);
+  free(final_str);
+
+  /* Send response headers to client */
+  header = ok_header(len, "text/html; charset=utf-8");
+  if(debug_on)printf("OK header\n");      
+  Rio_writen(fd, header, strlen(header));
+  printf("Response headers:\n");
+  printf("%s", header);
+  free(header);
+
+  /* Send response body to client */
+  Rio_writen(fd, body, len);
+  if(debug_on)printf("RIO Writen\n");          
+  free(body);
+  if(debug_on)printf("exit\n");          
+}
+
+static int contains(dictionary_t* d, char* given_key)
+{
+  char** keys = (char**)dictionary_keys(d);
+  int i;
+  for(i = 0; keys[i] != NULL; i++){
+    printf("contains keys %s\n", keys[i]);  
+    if(strcmp(given_key, keys[i]) == 0){
+      return i;
+      printf("Match at index %d\n", i);
+    }
+  }
+  return -1;
+}
+
+static void serve_friends(int fd, dictionary_t *query){
+
+  size_t len = 0;
+  char* body, *header, *usr_str = (char*)dictionary_get(query, "user");
+  printf("usr_str = %s\n", usr_str);
+
+  dictionary_t* usr_d = dictionary_get(d, usr_str);
+  printf("usr_d->count = %zu\n", usr_d->count);
+
+  int i;
+  char** usr_keys = (char**)dictionary_keys(usr_d);
+  for(i = 0; usr_keys[i] != NULL; i++)
+    printf("d_keys %s\n", usr_keys[i]);
+
+
+  body = (char*)join_strings((const char* const*)usr_keys, '\n');
+  len = strlen(body);
+  printf("full string: %s\n", body);
+
+  /* Send response headers to client */
+  header = ok_header(len, "text/html; charset=utf-8");
+  if(debug_on)printf("OK header\n");      
+  Rio_writen(fd, header, strlen(header));
+  printf("Response headers:\n");
+  printf("%s", header);
+  free(header);
+
+  /* Send response body to client */
+  Rio_writen(fd, body, len);
+  if(debug_on)printf("RIO Writen\n");          
+  free(body);
+  if(debug_on)printf("exit\n");   
+
+
+}
+
+static void serve_unfriend(int fd, dictionary_t *query){
+
 }
 
 
@@ -292,9 +446,10 @@ static void print_stringdictionary(dictionary_t *d)
 
   count = dictionary_count(d);
   for (i = 0; i < count; i++) {
-    printf("%s=%s\n",
-           dictionary_key(d, i),
-           (const char *)dictionary_value(d, i));
+    if(dictionary_value(d, i) != NULL)
+    printf("%s=%s\n", dictionary_key(d, i), (const char *)dictionary_value(d, i));
+    else
+    printf("%s= NULL (print NULL)\n", dictionary_key(d, i));      
   }
   printf("\n");
 }
