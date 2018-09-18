@@ -346,17 +346,18 @@ static int contains(dictionary_t* d, char* given_key)
 static void serve_friends(int fd, dictionary_t *query){
 
   size_t len = 0;
-  char* body, *header, *usr_str = (char*)dictionary_get(query, "user");
-  printf("usr_str = %s\n", usr_str);
+  char* body, *header, *usr_str = (char*)dictionary_get(query, "user"); /* Sometimes this will return NULL!!!! */
+  //printf("usr_str = %s\n", usr_str);
+  //printf("usr_str = %s\n", usr_str); /* debug only */
 
-  dictionary_t* usr_d = dictionary_get(d, usr_str);
-  printf("usr_d->count = %zu\n", usr_d->count);
+
+  dictionary_t* usr_d = (char*)dictionary_get(d, usr_str);
+  if(usr_d != NULL)   {printf("usr_d->count = %zu\n", usr_d->count);} else {printf("usr_d is null\n"); return;}
 
   int i;
   char** usr_keys = (char**)dictionary_keys(usr_d);
   for(i = 0; usr_keys[i] != NULL; i++)
     printf("d_keys %s\n", usr_keys[i]);
-
 
   body = (char*)join_strings((const char* const*)usr_keys, '\n');
   len = strlen(body);
