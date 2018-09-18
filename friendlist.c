@@ -8,6 +8,16 @@
  *   Dave O'Hallaron
  *   Carnegie Mellon University
  */
+
+/*  TO DO
+  1. Make befriend reciprocal
+  2. Finish unfriend for multiple users
+  3. Introduce
+  4. 
+  8. Concurrency
+
+*/
+
 #include "csapp.h"
 #include "dictionary.h"
 #include "more_string.h"
@@ -381,6 +391,43 @@ static void serve_friends(int fd, dictionary_t *query){
 }
 
 static void serve_unfriend(int fd, dictionary_t *query){
+
+  size_t len = 0;
+  char* body, *header, *usr_str = (char*)dictionary_get(query, "user"); /* Sometimes this will return NULL!!!! */
+  char* frd_str = (char*)dictionary_get(query, "friends"); 
+
+
+  //printf("usr_str = %s\n", usr_str);
+  //printf("usr_str = %s\n", usr_str); /* debug only */
+
+  dictionary_t* usr_d = (char*)dictionary_get(d, usr_str);
+  if(usr_d != NULL)   {printf("usr_d->count = %zu\n", usr_d->count);} else {printf("usr_d is null\n"); return;}
+
+  dictionary_remove(usr_d, frd_str);
+  printf("\n %s should have been removed!!!\n", frd_str);
+
+  int i;
+  char** usr_keys = (char**)dictionary_keys(usr_d);
+  for(i = 0; usr_keys[i] != NULL; i++)
+    printf("d_keys %s\n", usr_keys[i]);
+
+  body = (char*)join_strings((const char* const*)usr_keys, '\n');
+  len = strlen(body);
+  printf("full string: %s\n", body);
+
+  /* Send response headers to client */
+  header = ok_header(len, "text/html; charset=utf-8");
+  if(debug_on)printf("OK header\n");      
+  Rio_writen(fd, header, strlen(header));
+  printf("Response headers:\n");
+  printf("%s", header);
+  free(header);
+
+  /* Send response body to client */
+  Rio_writen(fd, body, len);
+  if(debug_on)printf("RIO Writen\n");          
+  free(body);
+  if(debug_on)printf("exit\n"); 
 
 }
 
